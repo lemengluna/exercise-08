@@ -1,0 +1,141 @@
+---
+title: "exercise-08"
+author: "lemeng"
+format: html
+---
+
+```{r}
+library(tidyverse)
+library(skimr)
+```
+load in data
+```{r}
+d <- read_csv("https://raw.githubusercontent.com/difiore/ada-datasets/main/Street_et_al_2017.csv")
+summary <- skim(d)
+print(summary)
+```
+
+plot ECV as a function of social group size (Group_size), longevity (Longevity), juvenile period length (Weaning), and reproductive lifespan (Repro_lifespan).
+```{r}
+par(mfrow = c(2, 2))
+
+plot(d$Group_size, d$ECV,
+     xlab = "Group Size",
+     ylab = "Brain Size (ECV)",
+     pch = 19, col = "blue")
+plot(d$Longevity, d$ECV,
+     xlab = "Longevity",
+     ylab = "Brain Size (ECV)",
+     pch = 19, col = "blue")
+plot(d$Weaning, d$ECV,
+     xlab = "Weaning",
+     ylab = "Brain Size (ECV)",
+     pch = 19, col = "blue")
+plot(d$Repro_lifespan, d$ECV,
+     xlab = "Repro_lifespan",
+     ylab = "Brain Size (ECV)",
+     pch = 19, col = "blue")
+
+```
+
+calculate the ordinary least squares regression coefficients for ECV as a function of social group size
+```{r}
+d_clean <- d %>% filter(!is.na(Group_size)& !is.na(ECV))
+
+mean_x <- mean(d_clean$Group_size)
+mean_y <- mean(d_clean$ECV)
+
+cov_d <- sum((d_clean$Group_size - mean(d_clean$Group_size))*(d_clean$ECV - mean(d_clean$ECV)))/ (nrow(d_clean)-1)
+
+beta_d <- cov_d/var(d_clean$Group_size)
+beta0_d <- mean(d_clean$ECV) - beta_d*mean(d_clean$Group_size)
+
+paste("beta1=", beta_d, "beta0=", beta0_d)
+```
+
+get coefficients using the lm() function
+```{r}
+m <- lm(ECV ~ Group_size, d_clean)
+coefficients(m)
+```
+the results are the same as those calculated by hand
+
+Repeat the analysis above for three different major radiations of primates - “catarrhines”, “platyrrhines”, and “strepsirhines”) separately. 
+```{r}
+
+m1 <- lm(ECV ~ Group_size, d_clean %>% filter(Taxonomic_group=="Catarrhini"))
+coefficients(m1)
+
+m2 <- lm(ECV ~ Group_size, d_clean %>% filter(Taxonomic_group=="Platyrrhini"))
+coefficients(m2)
+
+m3 <- lm(ECV ~ Group_size, d_clean %>% filter(Taxonomic_group=="Strepsirhini"))
+coefficients(m3)
+
+```
+These coefficients differ among groups. To determine the difference, we can use an interaction term in the model:
+
+```{r}
+m4 <- lm(ECV ~ Group_size*Taxonomic_group, d_clean)
+summary(m4)
+
+```
+The model indicates that while ECV scales positively with group size across all taxonomic groups, the interaction terms testing for differences in slopes among groups are not significant (p > 0.4). However, the intercepts show significant difference. Platyrrhines and strepsirhines exhibit significantly lower baseline ECV compared to catarrhines.
+
+
+
+For the first regression of ECV on social group size, calculate the standard error for the slope coefficient, the 95% CI, and the p value associated with this coefficient by hand. 
+```{r}
+residuals <- d_clean$ECV - (beta0_d + beta_d * d_clean$Group_size)
+s_squared <- sum(residuals^2) / (nrow(d_clean) - 2)
+
+SE_beta1 <- sqrt(s_squared / sum((d_clean$Group_size - mean_x)^2))
+
+# 95% CI
+t_critical <- qt(0.975, df = nrow(d_clean) - 2)
+CI_lower <- beta_d - t_critical * SE_beta1
+CI_upper <- beta_d + t_critical * SE_beta1
+paste("CI_lower=", CI_lower, "CI_upper=", CI_upper)
+
+confint(m)[2,]
+```
+
+Use a permutation approach with 1000 permutations to generate a null sampling distribution for the slope coefficient.
+```{r}
+library(infer)
+
+null_distribution <- d_clean %>%
+  specify(ECV ~ Group_size) %>%          
+  hypothesize(null = "independence") %>% 
+  generate(reps = 1000, type = "permute") %>% 
+  calculate(stat = "slope")
+
+visualize(null_distribution)
+
+obs <- d_clean  %>% specify (formula = ECV ~ Group_size) %>% calculate(stat = "slope")
+
+get_p_value(null_distribution, obs_stat = obs, direction = "both")
+
+visualize(null_distribution) + shade_p_value(obs_stat = obs, direction = "both")
+```
+The observed slope was more extreme than all permuted slopes with a p-value of < 0.001.
+
+Using bootstrapping to generate a 95% CI for the estimate of the slope coefficient.
+```{r}
+library(mosaic)
+n_boot <- 1000
+
+boot_slopes <- do(n_boot) * {coefficients(lm(ECV ~ Group_size, data=resample(d_clean)))[2]}
+
+# Quantile-based 95% CI
+boot_CI_quantile <- quantile(boot_slopes$Group_size, c(0.025, 0.975))
+boot_CI_quantile
+
+# Theory-based CI
+boot_SE <- sd(boot_slopes$Group_size)
+boot_CI_theory <- c(beta_d - 1.96 * boot_SE, beta_d + 1.96 * boot_SE)
+boot_CI_theory
+
+```
+0 is not in the 95% CI, which means the slope is significantly different from zero.
+
